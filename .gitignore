@@ -1,0 +1,6 @@
+*.o
+bin/*
+build/*
+.DS_Store
+ref/*
+games/*
