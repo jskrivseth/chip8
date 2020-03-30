@@ -14,21 +14,12 @@ const char keyboard_map[CHIP8_TOTAL_KEYS] = {
     SDLK_c, SDLK_d, SDLK_e,
     SDLK_f};
 
-double lastRenderTime = 0;
-
-double diffclock(clock_t clock1, clock_t clock2)
-{
-    double diffticks = clock2 - clock1;
-    double diffms = (diffticks) / (CLOCKS_PER_SEC / 1000);
-    return diffms;
-}
-
 void drawScreen(struct chip8_screen *screen, struct SDL_Renderer *renderer)
 {
 
     SDL_SetRenderDrawColor(renderer, 32, 32, 32, 0);
     SDL_RenderClear(renderer);
-    SDL_SetRenderDrawColor(renderer, 64, 160, 64, 96);
+    SDL_SetRenderDrawColor(renderer, 178, 133, 0, 128);
     for (int x = 0; x < CHIP8_DISPLAY_WIDTH; x++)
     {
         for (int y = 0; y < CHIP8_DISPLAY_HEIGHT; y++)
@@ -49,6 +40,16 @@ void drawScreen(struct chip8_screen *screen, struct SDL_Renderer *renderer)
 
 int main(int argc, char **argv)
 {
+    // a clock to keep track of every 60hz tick
+    clock_t renderTimer = 0;
+    // the desired render refresh rate
+    int renderHz = 60;
+
+    // the amount of time the last render too
+    clock_t lastRenderTime = 0;
+    // number of milliseconds to delay (moderated by lastRenderTime)  - 1/120th of a second
+    int loopDelayUsec = 120000;
+
     if (argc < 2)
     {
         printf("You must provide a file to load\n");
@@ -73,8 +74,6 @@ int main(int argc, char **argv)
     chip8_load(&chip8, buf, filesize);
     chip8_keyboard_set_map(&chip8.keyboard, keyboard_map);
 
-    double sixtyHertzTimer = 0;
-
     SDL_Init(SDL_INIT_EVERYTHING);
     SDL_Window *window = SDL_CreateWindow(
         EMULATOR_WINDOW_TITLE,
@@ -82,7 +81,7 @@ int main(int argc, char **argv)
         SDL_WINDOWPOS_UNDEFINED,
         CHIP8_DISPLAY_WIDTH * CHIP8_WINDOW_SCALER,
         CHIP8_DISPLAY_HEIGHT * CHIP8_WINDOW_SCALER,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_INPUT_FOCUS);
+        SDL_WINDOW_SHOWN | SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_OPENGL);
 
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_TARGETTEXTURE);
 
@@ -90,7 +89,7 @@ int main(int argc, char **argv)
     {
         clock_t start = clock();
         SDL_Event event;
-        
+
         if (SDL_PollEvent(&event) == 1)
         {
             switch (event.type)
@@ -122,35 +121,35 @@ int main(int argc, char **argv)
             break;
             }
         }
-        SDL_PumpEvents();
 
-        unsigned short opcode = chip8_memory_get_short(&chip8.memory, chip8.registers.PC);
-        chip8.registers.PC += 2;
-        chip8_exec(&chip8, opcode);
-
-        //if we're due to fire a 60hz event, do it now
-        if ((start - sixtyHertzTimer) >= (CLOCKS_PER_SEC / 600))
+        // if we're due to fire a render event, do it now.
+        //  It's not immediately clear why CLOCKS_PER_SEC / 600 is required instead of / 60
+        //  Somehow it's off by an order of magnitude
+        if ((clock() - renderTimer) >= (CLOCKS_PER_SEC / (renderHz * 10)))
         {
             if (chip8.registers.DT > 0)
             {
                 chip8.registers.DT -= 1;
-                printf("DT : %d \n", chip8.registers.DT);
+                //printf("DT: %d\n", chip8.registers.DT);
             }
             if (chip8.registers.ST > 0)
             {
                 //todo implement sound
                 chip8.registers.ST -= 1;
             }
-            sixtyHertzTimer = clock();
+            drawScreen(&chip8.screen, renderer);
+            renderTimer = clock();
         }
 
-        drawScreen(&chip8.screen, renderer);
+        unsigned short opcode = chip8_memory_get_short(&chip8.memory, chip8.registers.PC);
+        chip8.registers.PC += 2;
+        chip8_exec(&chip8, opcode);
 
-        clock_t stop = clock();
-        lastRenderTime = diffclock(start, stop);
-        float sleep_for = (lastRenderTime * 1000) / 120;
-        //printf("Render took %f  %f  %f, sleep for: %f, clocks per: %d, clock: %ld  \n", lastRenderTime, (double)start, (double)stop, sleep_for, CLOCKS_PER_SEC, clock());
-        SDL_Delay(floor(sleep_for));
+        lastRenderTime = clock() - start;
+        // given the amount of time the last loop took, we want to sleep up to loopDelayUsec seconds, moderated by lastRenderTime
+        float sleep_for = loopDelayUsec / (lastRenderTime >= 1 ? lastRenderTime : 1);
+        //printf("Render took %lu  %f, sleep for: %f, clocks per: %d, clock: %ld  \n", lastRenderTime, (double)start, sleep_for, CLOCKS_PER_SEC, clock());
+        usleep(sleep_for);
     }
 out:
     SDL_DestroyWindow(window);
